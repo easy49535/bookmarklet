@@ -1,0 +1,733 @@
+/*************************
+ * CONFIG
+ *************************/
+const YT_API_KEY = 'YOUR_YOUTUBE_API_KEY_HERE'; // <-- put your key here
+let youtubeVolume = 50;
+const KEEP_AUDIO_WHEN_HIDDEN = true; // ✅ NEW OPTION
+const loadplay = "https://www.youtube.com/watch?v=XcvHpkm07yY"; // keep blank if you don't want to play a video on load
+
+
+let youtubeIframe = null;
+let isMusicPlayerVisible = true;
+let isCollapsed = false;
+let playlist = [];
+let currentIndex = -1;
+
+// Load YouTube IFrame API
+(function loadYouTubeIframeAPI() {
+    var tag = document.createElement('script');
+    tag.src = "https://www.youtube.com/iframe_api";
+    document.head.appendChild(tag);
+})();
+
+/*************************
+ * MAIN PLAYER CONTAINER
+ *************************/
+var musicPlayerContainer = document.createElement('div');
+musicPlayerContainer.style.position = 'fixed';
+musicPlayerContainer.style.bottom = '10px';
+musicPlayerContainer.style.right = '200px';
+musicPlayerContainer.style.backgroundColor = 'rgba(0, 0, 0, 0.9)';
+musicPlayerContainer.style.color = 'white';
+musicPlayerContainer.style.border = '1px solid #333';
+musicPlayerContainer.style.padding = '10px';
+musicPlayerContainer.style.borderRadius = '8px';
+musicPlayerContainer.style.zIndex = '10000';
+musicPlayerContainer.style.display = 'block';
+musicPlayerContainer.style.width = '430px';
+musicPlayerContainer.style.boxSizing = 'border-box';
+musicPlayerContainer.style.cursor = 'default';
+musicPlayerContainer.style.transition = 'height 0.2s ease, opacity 0.2s ease';
+
+let expandedHeight = null;
+
+/*************************
+ * HEADER (DRAG + COLLAPSE)
+ *************************/
+var headerBar = document.createElement('div');
+headerBar.style.display = 'flex';
+headerBar.style.alignItems = 'center';
+headerBar.style.justifyContent = 'space-between';
+headerBar.style.marginBottom = '8px';
+headerBar.style.cursor = 'move';
+
+var titleLabel = document.createElement('span');
+titleLabel.textContent = 'YouTube Mini Player';
+titleLabel.style.fontSize = '14px';
+
+var headerRight = document.createElement('div');
+headerRight.style.display = 'flex';
+headerRight.style.alignItems = 'center';
+headerRight.style.gap = '6px';
+
+var collapseBtn = document.createElement('button');
+collapseBtn.textContent = '–';
+collapseBtn.style.width = '24px';
+collapseBtn.style.height = '24px';
+collapseBtn.style.borderRadius = '50%';
+collapseBtn.style.border = 'none';
+collapseBtn.style.cursor = 'pointer';
+collapseBtn.style.background = '#444';
+collapseBtn.style.color = '#fff';
+
+collapseBtn.onclick = function() {
+    toggleCollapse();
+};
+
+var closeBtn = document.createElement('button');
+closeBtn.textContent = '×';
+closeBtn.style.width = '24px';
+closeBtn.style.height = '24px';
+closeBtn.style.borderRadius = '50%';
+closeBtn.style.border = 'none';
+closeBtn.style.cursor = 'pointer';
+closeBtn.style.background = '#444';
+closeBtn.style.color = '#fff';
+
+closeBtn.onclick = function() {
+    isMusicPlayerVisible = false;
+    musicPlayerContainer.style.display = 'none';
+    const toToggle = document.getElementById("music-player");
+    if (toToggle) toToggle.style.display = 'none';
+};
+
+headerRight.appendChild(collapseBtn);
+headerRight.appendChild(closeBtn);
+headerBar.appendChild(titleLabel);
+headerBar.appendChild(headerRight);
+musicPlayerContainer.appendChild(headerBar);
+
+/*************************
+ * SEARCH + INPUT
+ *************************/
+var inputRow = document.createElement('div');
+inputRow.style.display = 'flex';
+inputRow.style.alignItems = 'center';
+inputRow.style.marginBottom = '6px';
+
+var youtubeInput = document.createElement('input');
+youtubeInput.type = 'text';
+youtubeInput.placeholder = 'Paste YouTube link or search...';
+youtubeInput.style.flex = '1';
+youtubeInput.style.marginRight = '6px';
+youtubeInput.style.padding = '4px 6px';
+youtubeInput.style.borderRadius = '4px';
+youtubeInput.style.border = '1px solid #555';
+youtubeInput.style.background = '#111';
+youtubeInput.style.color = '#fff';
+
+var searchButton = document.createElement('button');
+searchButton.textContent = '🔍';
+searchButton.style.width = '32px';
+searchButton.style.height = '32px';
+searchButton.style.borderRadius = '4px';
+searchButton.style.border = 'none';
+searchButton.style.cursor = 'pointer';
+searchButton.style.background = '#555';
+searchButton.style.color = '#fff';
+
+var loadButton = document.createElement('button');
+loadButton.textContent = '▶️';
+loadButton.style.width = '32px';
+loadButton.style.height = '32px';
+loadButton.style.marginLeft = '4px';
+loadButton.style.borderRadius = '4px';
+loadButton.style.border = 'none';
+loadButton.style.cursor = 'pointer';
+loadButton.style.background = '#28a745';
+loadButton.style.color = '#fff';
+
+inputRow.appendChild(youtubeInput);
+inputRow.appendChild(searchButton);
+inputRow.appendChild(loadButton);
+musicPlayerContainer.appendChild(inputRow);
+
+// Upload button
+var uploadButton = document.createElement('input');
+uploadButton.type = 'file';
+uploadButton.accept = 'video/*';
+uploadButton.style.marginLeft = '4px';
+uploadButton.style.color = '#fff';
+uploadButton.style.background = '#555';
+uploadButton.style.borderRadius = '4px';
+uploadButton.style.padding = '4px';
+uploadButton.style.cursor = 'pointer';
+
+uploadButton.onchange = function(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const url = URL.createObjectURL(file);
+    addLocalVideoToPlaylist(url, file.name, true);
+};
+
+inputRow.appendChild(uploadButton);
+
+/*************************
+ * AUTOCOMPLETE DROPDOWN
+ *************************/
+var autocompleteList = document.createElement('div');
+autocompleteList.style.position = 'relative';
+autocompleteList.style.maxHeight = '150px';
+autocompleteList.style.overflowY = 'auto';
+autocompleteList.style.marginBottom = '6px';
+autocompleteList.style.display = 'none';
+musicPlayerContainer.appendChild(autocompleteList);
+
+function searchYouTube(query) {
+    if (!YT_API_KEY || !query.trim()) return;
+
+    const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=5&q=${encodeURIComponent(query)}&key=${YT_API_KEY}`;
+
+    fetch(url)
+        .then(res => res.json())
+        .then(data => {
+            autocompleteList.innerHTML = '';
+            if (!data.items || !data.items.length) {
+                autocompleteList.style.display = 'none';
+                return;
+            }
+            data.items.forEach(item => {
+                const videoId = item.id.videoId;
+                const title = item.snippet.title;
+
+                var opt = document.createElement('div');
+                opt.style.padding = '4px 6px';
+                opt.style.cursor = 'pointer';
+                opt.style.fontSize = '13px';
+                opt.style.borderBottom = '1px solid #333';
+                opt.textContent = title;
+
+                opt.onmouseenter = () => opt.style.background = '#222';
+                opt.onmouseleave = () => opt.style.background = 'transparent';
+                opt.onclick = () => {
+                    autocompleteList.style.display = 'none';
+                    addToPlaylist(`https://www.youtube.com/watch?v=${videoId}`, title, true);
+                    youtubeInput.value = '';
+                };
+                autocompleteList.appendChild(opt);
+            });
+            autocompleteList.style.display = 'block';
+        })
+        .catch(() => autocompleteList.style.display = 'none');
+}
+
+youtubeInput.addEventListener('input', function() {
+    const val = youtubeInput.value.trim();
+    if (val === '' || val.startsWith('http')) {
+        autocompleteList.style.display = 'none';
+        return;
+    }
+    searchYouTube(val);
+});
+
+youtubeInput.addEventListener('keydown', function(event) {
+    if (event.key === 'Enter') {
+        const val = youtubeInput.value.trim();
+        if (val === '') return;
+        if (val.startsWith('http')) {
+            addToPlaylist(val, null, true);
+            youtubeInput.value = '';
+        } else {
+            searchYouTube(val);
+        }
+    }
+});
+
+searchButton.onclick = () => {
+    const val = youtubeInput.value.trim();
+    if (val && !val.startsWith('http')) searchYouTube(val);
+};
+
+loadButton.onclick = () => {
+    const val = youtubeInput.value.trim();
+    if (!val) return;
+    if (val.startsWith('http')) {
+        addToPlaylist(val, null, true);
+        youtubeInput.value = '';
+    } else {
+        searchYouTube(val);
+    }
+};
+
+/*************************
+ * PLAYER CONTROLS + VOLUME + PLAYLIST CONTROLS
+ *************************/
+var controlsRow = document.createElement('div');
+controlsRow.style.display = 'flex';
+controlsRow.style.alignItems = 'center';
+controlsRow.style.marginBottom = '6px';
+controlsRow.style.gap = '4px';
+
+var prevButton = document.createElement('button');
+prevButton.textContent = 'Previous';
+prevButton.style.border = 'none';
+prevButton.style.borderRadius = '4px';
+prevButton.style.padding = '4px 8px';
+prevButton.style.cursor = 'pointer';
+prevButton.style.background = '#555';
+prevButton.style.color = '#fff';
+
+var playButton = document.createElement('button');
+playButton.textContent = 'Play';
+playButton.style.border = 'none';
+playButton.style.borderRadius = '4px';
+playButton.style.padding = '4px 8px';
+playButton.style.cursor = 'pointer';
+playButton.style.background = '#555';
+playButton.style.color = '#fff';
+
+var pauseButton = document.createElement('button');
+pauseButton.textContent = 'Pause';
+pauseButton.style.border = 'none';
+pauseButton.style.borderRadius = '4px';
+pauseButton.style.padding = '4px 8px';
+pauseButton.style.cursor = 'pointer';
+pauseButton.style.background = '#555';
+pauseButton.style.color = '#fff';
+
+var nextButton = document.createElement('button');
+nextButton.textContent = 'Next';
+nextButton.style.border = 'none';
+nextButton.style.borderRadius = '4px';
+nextButton.style.padding = '4px 8px';
+nextButton.style.cursor = 'pointer';
+nextButton.style.background = '#555';
+nextButton.style.color = '#fff';
+
+var volumeSlider = document.createElement('input');
+volumeSlider.type = 'range';
+volumeSlider.min = 0;
+volumeSlider.max = 100;
+volumeSlider.value = youtubeVolume;
+volumeSlider.style.marginLeft = '8px';
+volumeSlider.style.flex = '1';
+volumeSlider.oninput = function() {
+    youtubeVolume = volumeSlider.value;
+    adjustYoutubeVolume(youtubeVolume / 100);
+    // Also sync local video volume
+    if (localVideo) localVideo.volume = youtubeVolume / 100;
+};
+
+controlsRow.appendChild(prevButton);
+controlsRow.appendChild(playButton);
+controlsRow.appendChild(pauseButton);
+controlsRow.appendChild(nextButton);
+controlsRow.appendChild(volumeSlider);
+musicPlayerContainer.appendChild(controlsRow);
+
+/*************************
+ * PLAYLIST LIST
+ *************************/
+var playlistContainer = document.createElement('div');
+playlistContainer.style.maxHeight = '140px';
+playlistContainer.style.overflowY = 'auto';
+playlistContainer.style.borderTop = '1px solid #333';
+playlistContainer.style.paddingTop = '4px';
+musicPlayerContainer.appendChild(playlistContainer);
+
+/*************************
+ * VIDEO ELEMENTS
+ *************************/
+var localVideo = document.createElement('video');
+localVideo.width = 380;
+localVideo.height = 200;
+localVideo.controls = true;
+localVideo.style.position = 'fixed';
+localVideo.style.top = '10px';
+localVideo.style.right = '500px';
+localVideo.style.zIndex = '10000';
+localVideo.style.display = 'none';
+document.body.appendChild(localVideo);
+
+function ensureIframe() {
+    if (!youtubeIframe) {
+        youtubeIframe = document.createElement('iframe');
+        youtubeIframe.width = 380;
+        youtubeIframe.height = 200;
+        youtubeIframe.style.position = 'fixed';
+        youtubeIframe.style.top = '10px';
+        youtubeIframe.style.right = '500px';
+        youtubeIframe.frameBorder = "0";
+        youtubeIframe.id = "music-player";
+        youtubeIframe.allow = "autoplay; encrypted-media; fullscreen";
+        youtubeIframe.style.zIndex = '10000';
+        youtubeIframe.style.display = 'none';
+        document.body.appendChild(youtubeIframe);
+    }
+}
+
+/*************************
+ * HELPER: HIDE BOTH PLAYERS CLEANLY
+ *************************/
+function hideAllPlayers(stopAudio = true) {
+    // YouTube
+    if (youtubeIframe) {
+        youtubeIframe.style.display = "none";
+
+        if (stopAudio) {
+            youtubeIframe.src = "";
+        }
+    }
+
+    // Local video
+    if (localVideo) {
+        localVideo.style.display = "none";
+
+        if (stopAudio) {
+            localVideo.pause();
+            localVideo.removeAttribute("src");
+            localVideo.load();
+        }
+    }
+}
+
+
+
+/*************************
+ * PLAYBACK FUNCTIONS
+ *************************/
+function playYoutubeLoop(youtubeLink) {
+    ensureIframe();
+
+    if (!youtubeLink || youtubeLink.trim() === '') {
+        youtubeIframe.src = '';
+        youtubeIframe.style.display = 'none';
+        return;
+    }
+
+    let videoId = null;
+    if (youtubeLink.includes('youtube.com/watch?v=')) {
+        videoId = youtubeLink.split('v=')[1].split('&')[0];
+    } else if (youtubeLink.includes('youtube.com/shorts/')) {
+        videoId = youtubeLink.split('shorts/')[1].split('&')[0];
+    } else if (youtubeLink.includes('youtu.be/')) {
+        videoId = youtubeLink.split('youtu.be/')[1].split(/[?&]/)[0];
+    }
+
+    if (!videoId) {
+        alert('Please provide a valid YouTube link.');
+        return;
+    }
+
+    youtubeIframe.src =
+        `https://www.youtube.com/embed/${videoId}?autoplay=1&loop=1&playlist=${videoId}&enablejsapi=1&origin=${location.origin}`;
+    youtubeIframe.style.display = "block";
+}
+
+function pauseYoutubeAudio() {
+    if (youtubeIframe) {
+        youtubeIframe.contentWindow.postMessage(
+            '{"event":"command","func":"pauseVideo","args":""}', '*'
+        );
+    }
+}
+
+function playYoutubeAudio() {
+    if (youtubeIframe) {
+        youtubeIframe.contentWindow.postMessage(
+            '{"event":"command","func":"playVideo","args":""}', '*'
+        );
+    }
+}
+
+function adjustYoutubeVolume(value) {
+    if (youtubeIframe) {
+        youtubeIframe.contentWindow.postMessage(
+            `{"event":"command","func":"setVolume","args":[${value * 100}]}`, '*'
+        );
+    }
+}
+
+/*************************
+ * PLAYLIST LOGIC
+ *************************/
+function addLocalVideoToPlaylist(url, title, playNow) {
+    const item = {
+        link: url,
+        title: title || "Local Video",
+        isLocal: true
+    };
+    playlist.push(item);
+    renderPlaylist();
+
+    if (playNow) {
+        currentIndex = playlist.length - 1;
+        playCurrent();
+    }
+}
+
+function addToPlaylist(link, title, playNow) {
+    const item = {
+        link,
+        title: title || link,
+        isLocal: false
+    };
+    playlist.push(item);
+    renderPlaylist();
+
+    if (playNow) {
+        currentIndex = playlist.length - 1;
+        playCurrent();
+    }
+}
+
+// FIXED: playCurrent() now cleanly switches between players
+function playCurrent() {
+    if (currentIndex < 0 || currentIndex >= playlist.length) return;
+
+    const item = playlist[currentIndex];
+
+hideAllPlayers(true); // explicit stop only when switching tracks
+
+
+
+    if (item.isLocal) {
+        localVideo.src = item.link;
+        localVideo.style.display = "block";
+        localVideo.volume = youtubeVolume / 100;
+        localVideo.play();
+    } else {
+        playYoutubeLoop(item.link);
+    }
+
+    highlightCurrentPlaylistItem();
+}
+
+function playNext() {
+    if (!playlist.length) return;
+    currentIndex = (currentIndex + 1) % playlist.length;
+    playCurrent();
+}
+
+function playPrev() {
+    if (!playlist.length) return;
+    currentIndex = (currentIndex - 1 + playlist.length) % playlist.length;
+    playCurrent();
+}
+
+function renderPlaylist() {
+    playlistContainer.innerHTML = '';
+    playlist.forEach((item, index) => {
+        var row = document.createElement('div');
+        row.style.display = 'flex';
+        row.style.alignItems = 'center';
+        row.style.justifyContent = 'space-between';
+        row.style.padding = '3px 0';
+        row.style.fontSize = '13px';
+        row.style.cursor = 'pointer';
+
+        var titleSpan = document.createElement('span');
+        titleSpan.textContent = item.title || (item.isLocal ? "Local Video" : "YouTube Video");
+        titleSpan.style.flex = '1';
+        titleSpan.style.marginRight = '6px';
+        titleSpan.style.whiteSpace = 'nowrap';
+        titleSpan.style.overflow = 'hidden';
+        titleSpan.style.textOverflow = 'ellipsis';
+
+        var removeBtn = document.createElement('button');
+        removeBtn.textContent = '×';
+        removeBtn.style.width = '20px';
+        removeBtn.style.height = '20px';
+        removeBtn.style.borderRadius = '50%';
+        removeBtn.style.border = 'none';
+        removeBtn.style.cursor = 'pointer';
+        removeBtn.style.background = '#444';
+        removeBtn.style.color = '#fff';
+
+        // FIXED: Proper removal logic (stops playback + revokes URL + fixes index)
+        removeBtn.onclick = function(e) {
+            e.stopPropagation();
+
+            const removed = playlist[index];
+
+            // Stop playback if removing current item
+            if (index === currentIndex) {
+                hideAllPlayers();
+            }
+
+            // Revoke object URL for local files
+            if (removed.isLocal) {
+                URL.revokeObjectURL(removed.link);
+            }
+
+            playlist.splice(index, 1);
+
+            // Adjust currentIndex safely
+            if (index < currentIndex) {
+                currentIndex--;
+            } else if (index === currentIndex) {
+                currentIndex = Math.min(currentIndex, playlist.length - 1);
+                if (currentIndex >= 0) playCurrent();
+            }
+
+            renderPlaylist();
+        };
+
+        row.onclick = function() {
+            currentIndex = index;
+            playCurrent();
+        };
+
+        row.appendChild(titleSpan);
+        row.appendChild(removeBtn);
+        playlistContainer.appendChild(row);
+    });
+    highlightCurrentPlaylistItem();
+}
+
+function highlightCurrentPlaylistItem() {
+    const children = playlistContainer.children;
+    for (let i = 0; i < children.length; i++) {
+        children[i].style.background = (i === currentIndex) ? '#222' : 'transparent';
+    }
+}
+
+// Wire playback buttons
+playButton.onclick = playYoutubeAudio;
+pauseButton.onclick = pauseYoutubeAudio;
+nextButton.onclick = playNext;
+prevButton.onclick = playPrev;
+
+/*************************
+ * TOGGLE VISIBILITY + COLLAPSE
+ *************************/
+// FIXED: Toggle now properly hides both players when closing
+function toggleMusicPlayer() {
+    isMusicPlayerVisible = !isMusicPlayerVisible;
+    musicPlayerContainer.style.display = isMusicPlayerVisible ? "block" : "none";
+
+    if (!isMusicPlayerVisible) {
+        // Hide visuals, keep audio if option enabled
+        hideAllPlayers(!KEEP_AUDIO_WHEN_HIDDEN);
+    } else if (currentIndex >= 0) {
+        // Restore visuals only
+        if (youtubeIframe) youtubeIframe.style.display = "block";
+        if (localVideo && playlist[currentIndex]?.isLocal) {
+            localVideo.style.display = "block";
+        }
+    }
+}
+
+
+
+function toggleCollapse() {
+    if (expandedHeight === null) {
+        expandedHeight = musicPlayerContainer.offsetHeight;
+    }
+
+    if (!isCollapsed) {
+        musicPlayerContainer.style.height = headerBar.offsetHeight + 'px';
+        musicPlayerContainer.style.overflow = 'hidden';
+        musicPlayerContainer.style.opacity = '0.9';
+        isCollapsed = true;
+        collapseBtn.textContent = '+';
+    } else {
+        musicPlayerContainer.style.height = expandedHeight + 'px';
+        musicPlayerContainer.style.overflow = 'visible';
+        musicPlayerContainer.style.opacity = '1';
+        isCollapsed = false;
+        collapseBtn.textContent = '–';
+    }
+}
+
+/*************************
+ * DRAGGABLE LOGIC
+ *************************/
+/*************************
+ * UPDATED DRAGGABLE FUNCTION
+ * Supports both Mouse and Touch
+ *************************/
+function makeDraggable(el, handle) {
+    let isDragging = false;
+    let offsetX = 0;
+    let offsetY = 0;
+
+    const start = (e) => {
+        isDragging = true;
+        // Support both mouse and touch coordinates
+        const clientX = e.type.includes('touch') ? e.touches[0].clientX : e.clientX;
+        const clientY = e.type.includes('touch') ? e.touches[0].clientY : e.clientY;
+
+        const rect = el.getBoundingClientRect();
+        offsetX = clientX - rect.left;
+        offsetY = clientY - rect.top;
+
+        document.body.style.userSelect = 'none';
+        document.body.style.touchAction = 'none'; // Prevents scrolling while dragging
+    };
+
+    const move = (e) => {
+        if (!isDragging) return;
+        
+        const clientX = e.type.includes('touch') ? e.touches[0].clientX : e.clientX;
+        const clientY = e.type.includes('touch') ? e.touches[0].clientY : e.clientY;
+
+        el.style.position = 'fixed';
+        el.style.left = (clientX - offsetX) + 'px';
+        el.style.top = (clientY - offsetY) + 'px';
+        el.style.right = 'auto';
+        el.style.bottom = 'auto';
+    };
+
+    const end = () => {
+        isDragging = false;
+        document.body.style.userSelect = '';
+        document.body.style.touchAction = '';
+    };
+
+    // Mouse Events
+    handle.addEventListener('mousedown', start);
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', end);
+
+    // Touch Events
+    handle.addEventListener('touchstart', start, { passive: false });
+    document.addEventListener('touchmove', move, { passive: false });
+    document.addEventListener('touchend', end);
+}
+
+/*************************
+ * UI ELEMENTS
+ *************************/
+// 1. Initialize Music Player Dragging
+makeDraggable(musicPlayerContainer, headerBar);
+
+var toggleButton = document.createElement('button');
+toggleButton.textContent = '';
+toggleButton.style.position = 'fixed';
+toggleButton.style.bottom = '50%';
+toggleButton.style.right = '5%';
+toggleButton.style.width = '60px';
+toggleButton.style.height = '60px';
+toggleButton.style.borderRadius = '50%';
+toggleButton.style.border = 'none';
+toggleButton.style.backgroundColor = '#fafbfd';
+toggleButton.style.color = '#111';
+toggleButton.style.fontSize = '24px';
+toggleButton.style.boxShadow = '0 0.1px 0.1px rgba(0,0,0,0.3)';
+toggleButton.style.zIndex = '10001';
+toggleButton.style.opacity = '0.1';
+toggleButton.style.cursor = 'pointer';
+
+toggleButton.onclick = toggleMusicPlayer;
+
+document.body.appendChild(musicPlayerContainer);
+document.body.appendChild(toggleButton);
+
+
+// 3. Initialize Toggle Button Dragging
+makeDraggable(toggleButton, toggleButton);
+
+document.body.appendChild(musicPlayerContainer);
+document.body.appendChild(toggleButton);
+
+
+
+if(loadplay && loadplay !== "") {
+
+//playYoutubeLoop(loadplay);
+addToPlaylist(loadplay, null, true)
+
+}
+
